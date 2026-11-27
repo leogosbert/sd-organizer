@@ -99,6 +99,12 @@ class MainActivity : AppCompatActivity() {
                 .show()
         }
 
+        findViewById<MaterialButton>(R.id.btnCheckup).setOnClickListener {
+            startActivity(Intent(this, CheckupActivity::class.java))
+        }
+        buildToolGrid()
+        handleWidgetIntent(intent)
+
         findViewById<MaterialButton>(R.id.btnUnused).setOnClickListener {
             startActivity(Intent(this, AppsActivity::class.java))
         }
@@ -135,6 +141,48 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+        MemoryWidget.refresh(this)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleWidgetIntent(intent)
+    }
+
+    /** The widget's "Move now" opens the app and asks first, so nothing moves without confirming. */
+    private fun handleWidgetIntent(i: Intent?) {
+        if (i?.getBooleanExtra(MemoryWidget.EXTRA_ASK_MOVE, false) == true) {
+            i.removeExtra(MemoryWidget.EXTRA_ASK_MOVE)
+            if (ready()) confirmAndMove()
+            else Toast.makeText(this, "Finish setup steps 1 and 2 first", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun buildToolGrid() {
+        val grid = findViewById<android.widget.GridLayout>(R.id.toolGrid)
+        val tools = listOf<Pair<String, () -> Unit>>(
+            "🗂 Large files" to { startActivity(Intent(this, LargeFilesActivity::class.java)) },
+            "👯 Duplicates" to { startActivity(Intent(this, DuplicatesActivity::class.java)) },
+            "🧹 Junk cleaner" to { startActivity(Intent(this, JunkActivity::class.java)) },
+            "💬 WhatsApp" to { startActivity(Intent(this, WhatsAppActivity::class.java)) },
+            "📊 Background data" to { startActivity(Intent(this, DataUsageActivity::class.java)) },
+            "🔋 Battery apps" to { startActivity(Intent(this, BatteryAppsActivity::class.java)) },
+            "📶 Network check" to { startActivity(Intent(this, NetworkActivity::class.java)) },
+            "💳 Play subscriptions" to { CheckupActivity.openPlaySubscriptions(this) }
+        )
+        for ((label, action) in tools) {
+            val b = MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle)
+            b.text = label
+            b.isAllCaps = false
+            b.setOnClickListener { action() }
+            val lp = android.widget.GridLayout.LayoutParams(
+                android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f),
+                android.widget.GridLayout.spec(android.widget.GridLayout.UNDEFINED, 1f)
+            )
+            lp.width = 0
+            lp.setMargins(4, 0, 4, 0)
+            grid.addView(b, lp)
+        }
     }
 
     private var runStartTime = 0L

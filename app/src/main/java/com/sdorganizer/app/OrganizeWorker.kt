@@ -74,6 +74,7 @@ class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
             }
         }
         Organizer.paused = false
+        runCatching { MemoryWidget.refresh(applicationContext) }
 
         val prefs = Prefs(applicationContext)
         if (r.error != "Already running") {

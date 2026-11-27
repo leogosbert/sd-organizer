@@ -61,7 +61,7 @@ object Organizer {
         "wallpapers", "wallpaper", ".statuses", ".shared", ".links", ".trash",
         "cache", ".cache", "temp", ".temp", "logs"
     )
-    private val PARTIAL_EXT = setOf("part", "crdownload", "tmp", "download", "partial", "pending", "!ut")
+    val PARTIAL_EXT = setOf("part", "crdownload", "tmp", "download", "partial", "pending", "!ut")
 
     private val PHOTO = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "gif", "bmp", "dng", "raw")
     private val VIDEO = setOf("mp4", "mkv", "3gp", "avi", "mov", "webm", "m4v", "flv", "wmv", "ts")
@@ -129,6 +129,27 @@ object Organizer {
             }
         }
         return list.filter { it.isDirectory }.distinctBy { it.canonicalPath }
+    }
+
+    /**
+     * Moves one phone file to the SD card in the organized layout (used by the cleaner tools).
+     * The copy is verified before the original is deleted.
+     */
+    fun moveOne(ctx: Context, target: MoveTarget, f: File, base: File): Boolean {
+        val len = f.length()
+        if (len <= 0L || target.freeBytes() < len + SD_RESERVE) return false
+        val rel = "$ARCHIVE/${category(f)}/${safeName(source(f, base))}/${monthFmt.format(Date(f.lastModified()))}"
+        val name = safeName(f.name)
+        val existing = target.sizeOf(rel, name)
+        if (existing != null && existing == len && target.sameContent(rel, name, f)) {
+            val ok = f.delete()
+            if (ok) scan(ctx, listOf(f.absolutePath))
+            return ok
+        }
+        val finalName = uniqueName(name) { target.sizeOf(rel, it) != null }
+        val ok = target.write(rel, finalName, f) { } && f.delete()
+        if (ok) scan(ctx, listOfNotNull(f.absolutePath, target.realPath(rel, finalName)))
+        return ok
     }
 
     private fun safeName(name: String) = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
@@ -477,7 +498,7 @@ object Organizer {
         if (!isRoot && dir.parentFile?.name != "Media" && dir.list()?.isEmpty() == true) dir.delete()
     }
 
-    private fun scan(ctx: Context, paths: List<String>) {
+    fun scan(ctx: Context, paths: List<String>) {
         if (paths.isEmpty()) return
         runCatching { MediaScannerConnection.scanFile(ctx, paths.toTypedArray(), null, null) }
     }

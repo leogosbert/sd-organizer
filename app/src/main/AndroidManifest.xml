@@ -8,6 +8,9 @@
         tools:ignore="ScopedStorage" />
     <uses-permission android:name="android.permission.PACKAGE_USAGE_STATS"
         tools:ignore="ProtectedPermissions" />
+    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -24,7 +27,8 @@
 
         <activity
             android:name=".MainActivity"
-            android:exported="true">
+            android:exported="true"
+            android:launchMode="singleTop">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -35,6 +39,58 @@
             android:name=".AppsActivity"
             android:exported="false"
             android:label="Apps you don't use" />
+        <activity
+            android:name=".CheckupActivity"
+            android:exported="false"
+            android:label="Phone checkup" />
+
+        <activity
+            android:name=".LargeFilesActivity"
+            android:exported="false"
+            android:label="Large files" />
+
+        <activity
+            android:name=".DuplicatesActivity"
+            android:exported="false"
+            android:label="Duplicate files" />
+
+        <activity
+            android:name=".JunkActivity"
+            android:exported="false"
+            android:label="Junk cleaner" />
+
+        <activity
+            android:name=".WhatsAppActivity"
+            android:exported="false"
+            android:label="WhatsApp cleaner" />
+
+        <activity
+            android:name=".DataUsageActivity"
+            android:exported="false"
+            android:label="Background data" />
+
+        <activity
+            android:name=".BatteryAppsActivity"
+            android:exported="false"
+            android:label="Battery-hungry apps" />
+
+        <activity
+            android:name=".NetworkActivity"
+            android:exported="false"
+            android:label="Network check" />
+
+        <receiver
+            android:name=".MemoryWidget"
+            android:exported="true"
+            android:label="SD Organizer">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+            </intent-filter>
+            <meta-data
+                android:name="android.appwidget.provider"
+                android:resource="@xml/widget_info" />
+        </receiver>
+
         <service
             android:name="androidx.work.impl.foreground.SystemForegroundService"
             android:foregroundServiceType="dataSync"

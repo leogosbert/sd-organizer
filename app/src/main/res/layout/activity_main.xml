@@ -310,6 +310,26 @@
             android:layout_marginTop="6dp"
             android:layout_marginBottom="20dp" />
 
+        <!-- Tools -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tools"
+            android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+        <com.google.android.material.button.MaterialButton
+            android:id="@+id/btnCheckup"
+            android:layout_width="match_parent"
+            android:layout_height="60dp"
+            android:text="🩺 Phone checkup &amp; all tools" />
+
+        <GridLayout
+            android:id="@+id/toolGrid"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="16dp"
+            android:columnCount="2" />
+
         <!-- Speed -->
         <TextView
             android:id="@+id/txtSpeedTitle"
