@@ -10,6 +10,16 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.locks.ReentrantLock
 
+/** Live progress of a run. */
+data class Progress(
+    val phase: String,
+    val done: Int = 0,
+    val total: Int = 0,
+    val bytesDone: Long = 0,
+    val bytesTotal: Long = 0,
+    val current: String = ""
+)
+
 class RunResult {
     var moved = 0
     var duplicates = 0
@@ -117,7 +127,11 @@ object Organizer {
 
     private fun safeName(name: String) = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
 
-    fun run(ctx: Context, onProgress: (String) -> Unit = {}): RunResult {
+    const val PHASE_SCAN = "scan"
+    const val PHASE_MOVE = "move"
+    const val PHASE_TIDY = "tidy"
+
+    fun run(ctx: Context, onProgress: (Progress) -> Unit = {}): RunResult {
         val result = RunResult()
         if (!lock.tryLock()) {
             result.error = "Already running"
@@ -148,11 +162,15 @@ object Organizer {
             var failsInRow = 0
             val cutoff = System.currentTimeMillis() - prefs.minAgeMillis
             val scanPaths = ArrayList<String>()
-            var count = 0
 
             if (prefs.cleanThumbnails) result.thumbsFreed = cleanThumbnails(base)
 
-            outer@ for (root in roots(base, prefs)) {
+            // Phase 1: find everything that will be moved, so progress can show a real percentage
+            onProgress(Progress(PHASE_SCAN))
+            val roots = roots(base, prefs)
+            val candidates = ArrayList<File>()
+            var totalBytes = 0L
+            for (root in roots) {
                 val stack = ArrayDeque<File>()
                 stack.push(root)
                 while (stack.isNotEmpty()) {
@@ -170,75 +188,91 @@ object Organizer {
                         val len = f.length()
                         if (len <= 0L) continue
                         if (f.lastModified() > cutoff) continue
-
-                        if (target.freeBytes() < len + SD_RESERVE) {
-                            result.error = "SD card is full. Free some space on the SD card."
-                            break@outer
-                        }
-
-                        val cat = category(f)
-                        val src = safeName(source(f, base))
-                        val month = monthFmt.format(Date(f.lastModified()))
-                        val rel = "$ARCHIVE/$cat/$src/$month"
-                        val name = safeName(f.name)
-
-                        val existing = target.sizeOf(rel, name)
-                        if (existing != null && existing == len && target.sameContent(rel, name, f)) {
-                            // Same file already on SD card: just remove the internal copy
-                            if (f.delete()) {
-                                result.duplicates++
-                                result.bytesFreed += len
-                                scanPaths.add(f.absolutePath)
-                            }
-                            continue
-                        }
-                        var finalName = name
-                        if (existing != null) {
-                            val stem = name.substringBeforeLast('.', name)
-                            val ext = if (name.contains('.')) "." + name.substringAfterLast('.') else ""
-                            var i = 1
-                            while (target.sizeOf(rel, finalName) != null) {
-                                finalName = "$stem ($i)$ext"
-                                i++
-                            }
-                        }
-
-                        val written = target.write(rel, finalName, f)
-                        if (written && f.delete()) {
-                            result.moved++
-                            result.bytesFreed += len
-                            failsInRow = 0
-                            scanPaths.add(f.absolutePath)
-                            target.realPath(rel, finalName)?.let { scanPaths.add(it) }
-                        } else {
-                            result.failed++
-                            if (!written) failsInRow++
-                            if (failsInRow >= 3 || (!written && !target.healthy())) {
-                                result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
-                                break@outer
-                            }
-                        }
-
-                        count++
-                        if (count % 10 == 0) {
-                            onProgress("Moved ${result.moved} files (${StorageInfo.fmt(result.bytesFreed)})…")
-                        }
-                        if (scanPaths.size >= 200) {
-                            scan(ctx, scanPaths)
-                            scanPaths.clear()
-                        }
+                        candidates.add(f)
+                        totalBytes += len
                     }
                 }
-                removeEmptyDirs(root, isRoot = true)
+                if (candidates.size % 200 == 0) {
+                    onProgress(Progress(PHASE_SCAN, 0, candidates.size, 0, totalBytes))
+                }
             }
+
+            // Phase 2: move, reporting progress down to the byte
+            var doneBytes = 0L
+            var index = 0
+            for (f in candidates) {
+                index++
+                val len = f.length()
+                val before = doneBytes
+                onProgress(Progress(PHASE_MOVE, index - 1, candidates.size, doneBytes, totalBytes, f.name))
+
+                if (target.freeBytes() < len + SD_RESERVE) {
+                    result.error = "SD card is full. Free some space on the SD card."
+                    break
+                }
+
+                val cat = category(f)
+                val src = safeName(source(f, base))
+                val month = monthFmt.format(Date(f.lastModified()))
+                val rel = "$ARCHIVE/$cat/$src/$month"
+                val name = safeName(f.name)
+
+                val existing = target.sizeOf(rel, name)
+                if (existing != null && existing == len && target.sameContent(rel, name, f)) {
+                    // Same file already on SD card: just remove the internal copy
+                    if (f.delete()) {
+                        result.duplicates++
+                        result.bytesFreed += len
+                        scanPaths.add(f.absolutePath)
+                    }
+                    doneBytes = before + len
+                    continue
+                }
+                var finalName = name
+                if (existing != null) {
+                    val stem = name.substringBeforeLast('.', name)
+                    val ext = if (name.contains('.')) "." + name.substringAfterLast('.') else ""
+                    var i = 1
+                    while (target.sizeOf(rel, finalName) != null) {
+                        finalName = "$stem ($i)$ext"
+                        i++
+                    }
+                }
+
+                val written = target.write(rel, finalName, f) { copied ->
+                    onProgress(Progress(PHASE_MOVE, index - 1, candidates.size, before + copied, totalBytes, f.name))
+                }
+                doneBytes = before + len
+                if (written && f.delete()) {
+                    result.moved++
+                    result.bytesFreed += len
+                    failsInRow = 0
+                    scanPaths.add(f.absolutePath)
+                    target.realPath(rel, finalName)?.let { scanPaths.add(it) }
+                } else {
+                    result.failed++
+                    if (!written) failsInRow++
+                    if (failsInRow >= 3 || (!written && !target.healthy())) {
+                        result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
+                        break
+                    }
+                }
+                if (scanPaths.size >= 200) {
+                    scan(ctx, scanPaths)
+                    scanPaths.clear()
+                }
+            }
+            onProgress(Progress(PHASE_MOVE, index, candidates.size, doneBytes, totalBytes, ""))
+            for (root in roots) removeEmptyDirs(root, isRoot = true)
             scan(ctx, scanPaths)
             scanPaths.clear()
 
             if (prefs.tidySd && result.error == null) {
-                onProgress("Tidying files already on the SD card…")
+                val tidyMsg: (String) -> Unit = { msg -> onProgress(Progress(PHASE_TIDY, current = msg)) }
+                tidyMsg("Tidying files already on the SD card…")
                 when (target) {
-                    is FileTarget -> tidySdFiles(ctx, target, result, onProgress)
-                    is SafTarget -> tidySdSaf(target, result, onProgress)
+                    is FileTarget -> tidySdFiles(ctx, target, result, tidyMsg)
+                    is SafTarget -> tidySdSaf(target, result, tidyMsg)
                 }
             }
             return result

@@ -88,15 +88,20 @@ class MainActivity : AppCompatActivity() {
             val info = infos?.lastOrNull() ?: return@observe
             val status = findViewById<TextView>(R.id.txtStatus)
             val btn = findViewById<MaterialButton>(R.id.btnRun)
+            val card = findViewById<View>(R.id.progressCard)
             when (info.state) {
                 WorkInfo.State.RUNNING, WorkInfo.State.ENQUEUED -> {
                     btn.isEnabled = false
                     btn.text = "Working…"
-                    status.text = info.progress.getString(OrganizeWorker.KEY_MSG) ?: "Scanning files…"
+                    status.text = ""
+                    card.visibility = View.VISIBLE
+                    showProgress(info.progress)
                 }
                 else -> {
                     btn.isEnabled = true
                     btn.text = "Move & organize now"
+                    card.visibility = View.GONE
+                    runStartTime = 0L
                     refresh()
                 }
             }
@@ -109,6 +114,86 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         refresh()
+    }
+
+    private var runStartTime = 0L
+    private var runStartFree = 0L
+    private var lastStorageUpdate = 0L
+
+    /** Updates the live progress card from the worker's progress data. */
+    private fun showProgress(d: androidx.work.Data) {
+        val phase = d.getString(OrganizeWorker.KEY_PHASE) ?: Organizer.PHASE_SCAN
+        val done = d.getInt(OrganizeWorker.KEY_DONE, 0)
+        val total = d.getInt(OrganizeWorker.KEY_TOTAL, 0)
+        val bDone = d.getLong(OrganizeWorker.KEY_BYTES_DONE, 0L)
+        val bTotal = d.getLong(OrganizeWorker.KEY_BYTES_TOTAL, 0L)
+        val current = d.getString(OrganizeWorker.KEY_CURRENT) ?: ""
+
+        val title = findViewById<TextView>(R.id.txtProgTitle)
+        val pct = findViewById<TextView>(R.id.txtProgPct)
+        val bar = findViewById<LinearProgressIndicator>(R.id.barProg)
+        val bytes = findViewById<TextView>(R.id.txtProgBytes)
+        val files = findViewById<TextView>(R.id.txtProgFiles)
+        val speed = findViewById<TextView>(R.id.txtProgSpeed)
+        val cur = findViewById<TextView>(R.id.txtProgCurrent)
+        val phone = findViewById<TextView>(R.id.txtProgPhone)
+
+        if (runStartTime == 0L) {
+            runStartTime = System.currentTimeMillis()
+            runStartFree = StorageInfo.internalFree()
+        }
+
+        when (phase) {
+            Organizer.PHASE_SCAN -> {
+                title.text = "Looking for files to move…"
+                pct.text = ""
+                bar.isIndeterminate = true
+                bytes.text = if (total > 0) "Found $total files · ${StorageInfo.fmt(bTotal)}" else ""
+                files.text = ""
+                speed.text = ""
+                cur.text = ""
+            }
+            Organizer.PHASE_MOVE -> {
+                title.text = "Moving to SD card"
+                val p = if (bTotal > 0) (bDone * 1000 / bTotal).toInt() else 0
+                bar.isIndeterminate = false
+                bar.setProgressCompat(p, true)
+                pct.text = "${p / 10}%"
+                bytes.text = "${StorageInfo.fmt(bDone)} of ${StorageInfo.fmt(bTotal)} moved"
+                files.text = "File ${minOf(done + 1, total)} of $total"
+                val secs = (System.currentTimeMillis() - runStartTime) / 1000.0
+                if (secs > 2 && bDone > 0) {
+                    val rate = bDone / secs
+                    val left = ((bTotal - bDone) / rate).toLong()
+                    val leftText = if (left >= 60) "${left / 60} min ${left % 60} s" else "$left s"
+                    speed.text = "${StorageInfo.fmt(rate.toLong())}/s · about $leftText left"
+                } else speed.text = ""
+                cur.text = if (current.isNotEmpty()) "Now: $current" else ""
+            }
+            else -> {
+                title.text = "Tidying the SD card…"
+                pct.text = ""
+                bar.isIndeterminate = true
+                bytes.text = current
+                files.text = ""
+                speed.text = ""
+                cur.text = ""
+            }
+        }
+
+        // Phone memory freed so far, updated live (at most twice a second)
+        val now = System.currentTimeMillis()
+        if (now - lastStorageUpdate > 500) {
+            lastStorageUpdate = now
+            val iTotal = StorageInfo.internalTotal()
+            val iFree = StorageInfo.internalFree()
+            val iPct = if (iTotal > 0) ((iTotal - iFree) * 100 / iTotal).toInt() else 0
+            val freed = maxOf(0L, iFree - runStartFree)
+            phone.text = "Phone memory: $iPct% full · ${StorageInfo.fmt(freed)} freed so far"
+            findViewById<LinearProgressIndicator>(R.id.barInternal).setProgressCompat(iPct, true)
+            findViewById<TextView>(R.id.txtInternal).text =
+                "${StorageInfo.fmt(iTotal - iFree)} used of ${StorageInfo.fmt(iTotal)} ($iPct%) · ${StorageInfo.fmt(iFree)} free"
+        }
     }
 
     private fun bindSwitch(id: Int, value: Boolean, onChange: (Boolean) -> Unit) {

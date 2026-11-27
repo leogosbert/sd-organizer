@@ -13,8 +13,24 @@ import java.util.Date
 class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
     override fun doWork(): Result {
-        val r = Organizer.run(applicationContext) { msg ->
-            setProgressAsync(workDataOf(KEY_MSG to msg))
+        var last = 0L
+        var lastPhase = ""
+        val r = Organizer.run(applicationContext) { p ->
+            val now = System.currentTimeMillis()
+            if (now - last >= 250 || p.phase != lastPhase) {
+                last = now
+                lastPhase = p.phase
+                setProgressAsync(
+                    workDataOf(
+                        KEY_PHASE to p.phase,
+                        KEY_DONE to p.done,
+                        KEY_TOTAL to p.total,
+                        KEY_BYTES_DONE to p.bytesDone,
+                        KEY_BYTES_TOTAL to p.bytesTotal,
+                        KEY_CURRENT to p.current
+                    )
+                )
+            }
         }
         val prefs = Prefs(applicationContext)
         if (r.error != "Already running") {
@@ -27,6 +43,12 @@ class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
 
     companion object {
         const val KEY_MSG = "msg"
+        const val KEY_PHASE = "phase"
+        const val KEY_DONE = "done"
+        const val KEY_TOTAL = "total"
+        const val KEY_BYTES_DONE = "bytes_done"
+        const val KEY_BYTES_TOTAL = "bytes_total"
+        const val KEY_CURRENT = "current"
         const val AUTO = "organize_auto"
         const val NOW = "organize_now"
 

@@ -16,14 +16,28 @@ interface MoveTarget {
     fun freeBytes(): Long
     /** Size of an existing file at rel/name, or null if none. */
     fun sizeOf(rel: String, name: String): Long?
-    /** Copies src into rel/name. Returns true only if the full file was written. */
-    fun write(rel: String, name: String, src: File): Boolean
+    /** Copies src into rel/name, reporting bytes copied. Returns true only if the full file was written and verified. */
+    fun write(rel: String, name: String, src: File, onBytes: (Long) -> Unit): Boolean
     /** Real file path for media scanning, if known. */
     fun realPath(rel: String, name: String): String?
     /** True if the file at rel/name has the same content as src (size + start/end bytes). */
     fun sameContent(rel: String, name: String, src: File): Boolean
     /** True if the SD card still accepts new files (false when it has turned read-only or failed). */
     fun healthy(): Boolean
+}
+
+/** Copies a stream while reporting how many bytes have been copied so far. */
+fun copyWithProgress(input: java.io.InputStream, out: java.io.OutputStream, onBytes: (Long) -> Unit) {
+    val buf = ByteArray(256 * 1024)
+    var total = 0L
+    while (true) {
+        val n = input.read(buf)
+        if (n < 0) break
+        out.write(buf, 0, n)
+        total += n
+        onBytes(total)
+    }
+    out.flush()
 }
 
 /** Compares two files cheaply: same size, same first and last 64 KB. */
@@ -144,13 +158,18 @@ class FileTarget(private val root: File) : MoveTarget {
         return if (f.isFile) f.length() else null
     }
 
-    override fun write(rel: String, name: String, src: File): Boolean {
+    override fun write(rel: String, name: String, src: File, onBytes: (Long) -> Unit): Boolean {
         val dir = File(root, rel)
         if (!dir.isDirectory && !dir.mkdirs()) return false
         val tmp = File(dir, ".$name.part")
         val dest = File(dir, name)
         return try {
-            src.inputStream().use { input -> tmp.outputStream().use { out -> input.copyTo(out, 256 * 1024) } }
+            src.inputStream().use { input ->
+                java.io.FileOutputStream(tmp).use { out ->
+                    copyWithProgress(input, out, onBytes)
+                    out.fd.sync() // make sure it is really on the card before checking
+                }
+            }
             if (tmp.length() != src.length()) { tmp.delete(); return false }
             // Read the copy back from the SD card and compare every byte with the original
             val ok = tmp.inputStream().use { a -> src.inputStream().use { b -> Fingerprint.fullSame(a, b) } }
@@ -257,14 +276,14 @@ class SafTarget(ctx: Context, private val tree: Uri, private val root: File) : M
         return if (e.isDir) -1L else e.size
     }
 
-    override fun write(rel: String, name: String, src: File): Boolean {
+    override fun write(rel: String, name: String, src: File, onBytes: (Long) -> Unit): Boolean {
         val d = dir(rel, true) ?: return false
         val doc = runCatching { DocumentsContract.createDocument(cr, d, "application/octet-stream", name) }.getOrNull()
             ?: return false
         return try {
             src.inputStream().use { input ->
                 val out = cr.openOutputStream(doc, "w") ?: throw IllegalStateException("no stream")
-                out.use { input.copyTo(it, 256 * 1024) }
+                out.use { copyWithProgress(input, it, onBytes) }
             }
             // Check the written size
             var written = -1L
