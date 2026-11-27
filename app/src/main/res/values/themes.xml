@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.SDOrganizer" parent="Theme.Material3.DayNight">
+        <item name="colorPrimary">#0B7A75</item>
+        <item name="colorSecondary">#F2A541</item>
+    </style>
+</resources>

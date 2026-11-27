@@ -1,0 +1,11 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <!-- SD card body -->
+    <path android:fillColor="#FFFFFF"
+        android:pathData="M42,32 L64,32 Q68,32 68,36 L68,74 Q68,78 64,78 L40,78 Q36,78 36,74 L36,38 Z" />
+    <!-- contacts -->
+    <path android:fillColor="#0B7A75" android:pathData="M44,36 h3 v8 h-3 z M50,36 h3 v8 h-3 z M56,36 h3 v8 h-3 z M62,36 h3 v8 h-3 z" />
+    <!-- arrow down into card -->
+    <path android:fillColor="#F2A541" android:pathData="M49,50 h6 v10 h5 l-8,9 l-8,-9 h5 z" />
+</vector>
