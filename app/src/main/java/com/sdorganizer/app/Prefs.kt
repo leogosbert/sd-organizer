@@ -17,7 +17,7 @@ class Prefs(ctx: Context) {
         set(v) = sp.edit().putInt("age_idx", v).apply()
 
     var moveCamera: Boolean
-        get() = sp.getBoolean("camera", true)
+        get() = sp.getBoolean("camera", false)
         set(v) = sp.edit().putBoolean("camera", v).apply()
 
     var moveChatMedia: Boolean
@@ -31,6 +31,11 @@ class Prefs(ctx: Context) {
     var cleanThumbnails: Boolean
         get() = sp.getBoolean("thumbs", true)
         set(v) = sp.edit().putBoolean("thumbs", v).apply()
+
+    /** Set only when the user presses the Move button. A run without a fresh press does nothing. */
+    var moveRequestedAt: Long
+        get() = sp.getLong("move_req", 0L)
+        set(v) = sp.edit().putLong("move_req", v).commit().let { }
 
     var lastRunSummary: String?
         get() = sp.getString("last_run", null)

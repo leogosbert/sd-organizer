@@ -23,6 +23,16 @@ class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
     private val nm = ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
     override fun doWork(): Result {
+        // Idle guard: only run right after the user pressed "Move & organize now".
+        // If Android tries to re-run an old or interrupted job later, it does nothing.
+        val prefs0 = Prefs(applicationContext)
+        val requested = prefs0.moveRequestedAt
+        prefs0.moveRequestedAt = 0L
+        if (requested == 0L || System.currentTimeMillis() - requested > 2 * 60_000L) {
+            WorkManager.getInstance(applicationContext).cancelUniqueWork(AUTO)
+            return Result.success(workDataOf(KEY_MSG to "Idle"))
+        }
+
         // Run as a foreground task so Android does not stop long moves (or a long pause) after 10 minutes
         runCatching { setForegroundAsync(foregroundInfo("Preparing…", 0, true, false)).get() }
 
@@ -125,6 +135,7 @@ class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
         }
 
         fun runNow(ctx: Context) {
+            Prefs(ctx).moveRequestedAt = System.currentTimeMillis()
             val req = OneTimeWorkRequestBuilder<OrganizeWorker>().build()
             WorkManager.getInstance(ctx).enqueueUniqueWork(NOW, ExistingWorkPolicy.KEEP, req)
         }

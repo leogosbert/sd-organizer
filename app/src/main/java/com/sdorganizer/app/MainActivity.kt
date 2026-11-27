@@ -81,8 +81,7 @@ class MainActivity : AppCompatActivity() {
                 ) {
                     notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
                 }
-                runStartTime = 0L
-                OrganizeWorker.runNow(this)
+                confirmAndMove()
             }
         }
 
@@ -311,7 +310,7 @@ class MainActivity : AppCompatActivity() {
                 internalPct < 80,
                 if (internalPct < 80) "Phone memory $internalPct% full — good"
                 else "Phone memory $internalPct% full — phones slow down above 80%. Tap to move files now.",
-                { if (ready()) OrganizeWorker.runNow(this) else requestFileAccess() }
+                { if (ready()) confirmAndMove() else requestFileAccess() }
             )
         )
 
@@ -384,6 +383,25 @@ class MainActivity : AppCompatActivity() {
         }
         val good = items.count { it.first }
         findViewById<TextView>(R.id.txtSpeedTitle).text = "Speed check: $good of ${items.size - 1} good"
+    }
+
+    /** The ONLY way a move starts: the user presses Move, sees what will happen, and confirms. */
+    private fun confirmAndMove() {
+        val what = buildString {
+            append("• Age: ").append(Prefs.AGE_LABELS[prefs.ageIndex]).append("\n")
+            append("• Camera photos & videos: ").append(if (prefs.moveCamera) "MOVED" else "stay on phone").append("\n")
+            append("• WhatsApp & Telegram files: ").append(if (prefs.moveChatMedia) "MOVED" else "stay on phone").append("\n")
+            append("• Reorganize SD card files: ").append(if (prefs.tidySd) "yes" else "no")
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Move files to the SD card now?")
+            .setMessage(what + "\n\nYou can pause or stop at any time.")
+            .setPositiveButton("Move now") { _, _ ->
+                runStartTime = 0L
+                OrganizeWorker.runNow(this)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
     }
 
     private fun openFirst(vararg intents: Intent) {
