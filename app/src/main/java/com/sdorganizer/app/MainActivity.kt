@@ -45,6 +45,8 @@ class MainActivity : AppCompatActivity() {
         refresh()
     }
 
+    private val notifPerm = registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
     private val legacyPerms = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
         refresh()
     }
@@ -74,8 +76,28 @@ class MainActivity : AppCompatActivity() {
             if (!ready()) {
                 Toast.makeText(this, "Finish setup steps 1 and 2 first", Toast.LENGTH_LONG).show()
             } else {
+                if (Build.VERSION.SDK_INT >= 33 &&
+                    checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED
+                ) {
+                    notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
+                runStartTime = 0L
                 OrganizeWorker.runNow(this)
             }
+        }
+
+        findViewById<MaterialButton>(R.id.btnPause).setOnClickListener {
+            Organizer.paused = !Organizer.paused
+            (it as MaterialButton).text = if (Organizer.paused) "▶ Resume" else "⏸ Pause"
+            if (!Organizer.paused) runStartTime = 0L // restart the speed estimate after a pause
+        }
+        findViewById<MaterialButton>(R.id.btnStop).setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Stop moving?")
+                .setMessage("Files already moved stay on the SD card. The file being copied right now stays safely on your phone.")
+                .setPositiveButton("Stop") { _, _ -> OrganizeWorker.stop(this) }
+                .setNegativeButton("Keep going", null)
+                .show()
         }
 
         findViewById<MaterialButton>(R.id.btnUnused).setOnClickListener {
@@ -117,8 +139,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private var runStartTime = 0L
-    private var runStartFree = 0L
-    private var lastStorageUpdate = 0L
+    private var runStartBytes = 0L
 
     /** Updates the live progress card from the worker's progress data. */
     private fun showProgress(d: androidx.work.Data) {
@@ -136,11 +157,10 @@ class MainActivity : AppCompatActivity() {
         val files = findViewById<TextView>(R.id.txtProgFiles)
         val speed = findViewById<TextView>(R.id.txtProgSpeed)
         val cur = findViewById<TextView>(R.id.txtProgCurrent)
-        val phone = findViewById<TextView>(R.id.txtProgPhone)
 
         if (runStartTime == 0L) {
             runStartTime = System.currentTimeMillis()
-            runStartFree = StorageInfo.internalFree()
+            runStartBytes = bDone
         }
 
         when (phase) {
@@ -162,8 +182,8 @@ class MainActivity : AppCompatActivity() {
                 bytes.text = "${StorageInfo.fmt(bDone)} of ${StorageInfo.fmt(bTotal)} moved"
                 files.text = "File ${minOf(done + 1, total)} of $total"
                 val secs = (System.currentTimeMillis() - runStartTime) / 1000.0
-                if (secs > 2 && bDone > 0) {
-                    val rate = bDone / secs
+                if (secs > 2 && bDone > runStartBytes) {
+                    val rate = (bDone - runStartBytes) / secs
                     val left = ((bTotal - bDone) / rate).toLong()
                     val leftText = if (left >= 60) "${left / 60} min ${left % 60} s" else "$left s"
                     speed.text = "${StorageInfo.fmt(rate.toLong())}/s · about $leftText left"
@@ -181,19 +201,49 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        // Phone memory freed so far, updated live (at most twice a second)
-        val now = System.currentTimeMillis()
-        if (now - lastStorageUpdate > 500) {
-            lastStorageUpdate = now
-            val iTotal = StorageInfo.internalTotal()
-            val iFree = StorageInfo.internalFree()
-            val iPct = if (iTotal > 0) ((iTotal - iFree) * 100 / iTotal).toInt() else 0
-            val freed = maxOf(0L, iFree - runStartFree)
-            phone.text = "Phone memory: $iPct% full · ${StorageInfo.fmt(freed)} freed so far"
-            findViewById<LinearProgressIndicator>(R.id.barInternal).setProgressCompat(iPct, true)
-            findViewById<TextView>(R.id.txtInternal).text =
-                "${StorageInfo.fmt(iTotal - iFree)} used of ${StorageInfo.fmt(iTotal)} ($iPct%) · ${StorageInfo.fmt(iFree)} free"
+        // Pause button label
+        val paused = d.getBoolean(OrganizeWorker.KEY_PAUSED, false)
+        findViewById<MaterialButton>(R.id.btnPause).text = if (paused) "▶ Resume" else "⏸ Pause"
+        if (paused) {
+            title.text = "Paused"
+            speed.text = "Tap Resume to continue"
         }
+
+        // Live memory: phone used goes DOWN and SD card used goes UP as bytes are moved
+        val phoneTotal = StorageInfo.internalTotal()
+        val sdTotal = StorageInfo.sdTotal(this)
+        val phoneFree0 = d.getLong(OrganizeWorker.KEY_PHONE_START, 0L).takeIf { it > 0 } ?: StorageInfo.internalFree()
+        val sdFree0 = d.getLong(OrganizeWorker.KEY_SD_START, 0L).takeIf { it > 0 } ?: StorageInfo.sdFree(this)
+        val moved = if (phase == Organizer.PHASE_MOVE) bDone else if (phase == Organizer.PHASE_TIDY) bTotal else 0L
+
+        val phoneUsed0 = phoneTotal - phoneFree0
+        val phoneUsedNow = maxOf(0L, phoneUsed0 - moved)
+        val phoneUsedEnd = maxOf(0L, phoneUsed0 - bTotal)
+        val sdUsed0 = sdTotal - sdFree0
+        val sdUsedNow = minOf(sdTotal, sdUsed0 + moved)
+        val sdUsedEnd = minOf(sdTotal, sdUsed0 + bTotal)
+
+        fun pct(used: Long, total: Long) = if (total > 0) (used * 100 / total).toInt() else 0
+        fun permille(used: Long, total: Long) = if (total > 0) (used * 1000 / total).toInt() else 0
+
+        findViewById<LinearProgressIndicator>(R.id.barSimPhone).setProgressCompat(permille(phoneUsedNow, phoneTotal), true)
+        findViewById<TextView>(R.id.txtSimPhone).text =
+            "Was ${pct(phoneUsed0, phoneTotal)}% → now ${pct(phoneUsedNow, phoneTotal)}% → when done ${pct(phoneUsedEnd, phoneTotal)}%\n" +
+                    "${StorageInfo.fmt(phoneTotal - phoneUsedNow)} free of ${StorageInfo.fmt(phoneTotal)} · " +
+                    "${StorageInfo.fmt(moved)} freed"
+        findViewById<LinearProgressIndicator>(R.id.barSimSd).setProgressCompat(permille(sdUsedNow, sdTotal), true)
+        findViewById<TextView>(R.id.txtSimSd).text =
+            "Was ${pct(sdUsed0, sdTotal)}% → now ${pct(sdUsedNow, sdTotal)}% → when done ${pct(sdUsedEnd, sdTotal)}%\n" +
+                    "${StorageInfo.fmt(sdTotal - sdUsedNow)} free of ${StorageInfo.fmt(sdTotal)}"
+
+        // Keep the top storage card moving too
+        findViewById<LinearProgressIndicator>(R.id.barInternal).setProgressCompat(pct(phoneUsedNow, phoneTotal), true)
+        findViewById<TextView>(R.id.txtInternal).text =
+            "${StorageInfo.fmt(phoneUsedNow)} used of ${StorageInfo.fmt(phoneTotal)} (${pct(phoneUsedNow, phoneTotal)}%) · " +
+                    "${StorageInfo.fmt(phoneTotal - phoneUsedNow)} free"
+        findViewById<LinearProgressIndicator>(R.id.barSd).setProgressCompat(pct(sdUsedNow, sdTotal), true)
+        findViewById<TextView>(R.id.txtSd).text =
+            "${StorageInfo.fmt(sdTotal - sdUsedNow)} free of ${StorageInfo.fmt(sdTotal)} · files go to “${Organizer.ARCHIVE}”"
     }
 
     private fun bindSwitch(id: Int, value: Boolean, onChange: (Boolean) -> Unit) {

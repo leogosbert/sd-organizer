@@ -27,7 +27,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.${{ github.run_number }}
-          name: SD Organizer v1.1.${{ github.run_number }}
+          tag_name: v1.2.${{ github.run_number }}
+          name: SD Organizer v1.2.${{ github.run_number }}
           files: SDOrganizer.apk
           make_latest: true

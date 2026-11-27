@@ -17,7 +17,11 @@ data class Progress(
     val total: Int = 0,
     val bytesDone: Long = 0,
     val bytesTotal: Long = 0,
-    val current: String = ""
+    val current: String = "",
+    val paused: Boolean = false,
+    /** Free space when the run started, so the screen can show before → now. */
+    val phoneFreeStart: Long = 0,
+    val sdFreeStart: Long = 0
 )
 
 class RunResult {
@@ -28,6 +32,7 @@ class RunResult {
     var thumbsFreed = 0L
     var tidied = 0
     var error: String? = null
+    var stopped = false
 
     fun summary(): String {
         val sb = StringBuilder()
@@ -35,6 +40,7 @@ class RunResult {
         if (tidied > 0) sb.append(" · tidied $tidied SD card files")
         if (duplicates > 0) sb.append(" · $duplicates duplicates removed")
         if (failed > 0) sb.append(" · $failed could not be moved")
+        if (stopped) sb.append(" · stopped by you")
         error?.let { sb.append("\n⚠ ").append(it) }
         return sb.toString()
     }
@@ -131,7 +137,14 @@ object Organizer {
     const val PHASE_MOVE = "move"
     const val PHASE_TIDY = "tidy"
 
-    fun run(ctx: Context, onProgress: (Progress) -> Unit = {}): RunResult {
+    /** Set from the screen; the move waits while this is true. */
+    @Volatile
+    var paused = false
+
+    private class StopRequested : Exception()
+
+    fun run(ctx: Context, shouldStop: () -> Boolean = { false }, onProgress: (Progress) -> Unit = {}): RunResult {
+        paused = false
         val result = RunResult()
         if (!lock.tryLock()) {
             result.error = "Already running"
@@ -166,7 +179,23 @@ object Organizer {
             if (prefs.cleanThumbnails) result.thumbsFreed = cleanThumbnails(base)
 
             // Phase 1: find everything that will be moved, so progress can show a real percentage
-            onProgress(Progress(PHASE_SCAN))
+            val phoneStart = StorageInfo.internalFree()
+            val sdStart = StorageInfo.sdFree(ctx)
+            var lastP = Progress(PHASE_SCAN)
+            val emit: (Progress) -> Unit = { p ->
+                lastP = p
+                onProgress(p.copy(paused = paused, phoneFreeStart = phoneStart, sdFreeStart = sdStart))
+            }
+            /** Blocks while paused. Throws StopRequested if the user pressed Stop. */
+            fun checkpoint() {
+                while (paused && !shouldStop()) {
+                    emit(lastP)
+                    Thread.sleep(300)
+                }
+                if (shouldStop()) throw StopRequested()
+            }
+
+            emit(Progress(PHASE_SCAN))
             val roots = roots(base, prefs)
             val candidates = ArrayList<File>()
             var totalBytes = 0L
@@ -193,7 +222,7 @@ object Organizer {
                     }
                 }
                 if (candidates.size % 200 == 0) {
-                    onProgress(Progress(PHASE_SCAN, 0, candidates.size, 0, totalBytes))
+                    emit(Progress(PHASE_SCAN, 0, candidates.size, 0, totalBytes))
                 }
             }
 
@@ -201,10 +230,16 @@ object Organizer {
             var doneBytes = 0L
             var index = 0
             for (f in candidates) {
+                try {
+                    checkpoint()
+                } catch (e: StopRequested) {
+                    result.stopped = true
+                    break
+                }
                 index++
                 val len = f.length()
                 val before = doneBytes
-                onProgress(Progress(PHASE_MOVE, index - 1, candidates.size, doneBytes, totalBytes, f.name))
+                emit(Progress(PHASE_MOVE, index - 1, candidates.size, doneBytes, totalBytes, f.name))
 
                 if (target.freeBytes() < len + SD_RESERVE) {
                     result.error = "SD card is full. Free some space on the SD card."
@@ -240,7 +275,13 @@ object Organizer {
                 }
 
                 val written = target.write(rel, finalName, f) { copied ->
-                    onProgress(Progress(PHASE_MOVE, index - 1, candidates.size, before + copied, totalBytes, f.name))
+                    checkpoint() // pauses mid-file; Stop aborts this copy and keeps the original
+                    emit(Progress(PHASE_MOVE, index - 1, candidates.size, before + copied, totalBytes, f.name))
+                }
+                if (!written && shouldStop()) {
+                    // Stopped in the middle of this file: the partial copy was removed, original untouched
+                    result.stopped = true
+                    break
                 }
                 doneBytes = before + len
                 if (written && f.delete()) {
@@ -262,17 +303,17 @@ object Organizer {
                     scanPaths.clear()
                 }
             }
-            onProgress(Progress(PHASE_MOVE, index, candidates.size, doneBytes, totalBytes, ""))
+            emit(Progress(PHASE_MOVE, index, candidates.size, doneBytes, totalBytes, ""))
             for (root in roots) removeEmptyDirs(root, isRoot = true)
             scan(ctx, scanPaths)
             scanPaths.clear()
 
-            if (prefs.tidySd && result.error == null) {
-                val tidyMsg: (String) -> Unit = { msg -> onProgress(Progress(PHASE_TIDY, current = msg)) }
+            if (prefs.tidySd && result.error == null && !result.stopped && !shouldStop()) {
+                val tidyMsg: (String) -> Unit = { msg -> emit(Progress(PHASE_TIDY, current = msg)) }
                 tidyMsg("Tidying files already on the SD card…")
                 when (target) {
-                    is FileTarget -> tidySdFiles(ctx, target, result, tidyMsg)
-                    is SafTarget -> tidySdSaf(target, result, tidyMsg)
+                    is FileTarget -> tidySdFiles(ctx, target, result, shouldStop, tidyMsg)
+                    is SafTarget -> tidySdSaf(target, result, shouldStop, tidyMsg)
                 }
             }
             return result
@@ -319,7 +360,9 @@ object Organizer {
      * PhoneArchive/<Category>/<Source>/<YYYY-MM> layout. Files stay on the SD card, so this is an
      * instant rename, not a copy.
      */
-    private fun tidySdFiles(ctx: Context, target: FileTarget, result: RunResult, onProgress: (String) -> Unit) {
+    private fun tidySdFiles(
+        ctx: Context, target: FileTarget, result: RunResult, shouldStop: () -> Boolean, onProgress: (String) -> Unit
+    ) {
         val sd = target.root()
         val cutoff = System.currentTimeMillis() - 10 * 60_000L
         val files = ArrayList<File>()
@@ -347,6 +390,8 @@ object Organizer {
         }
         val scanPaths = ArrayList<String>()
         for (f in files) {
+            while (paused && !shouldStop()) Thread.sleep(300)
+            if (shouldStop()) { result.stopped = true; break }
             if (f.length() <= 0L || f.lastModified() > cutoff) continue
             val rel = "$ARCHIVE/${category(f)}/${safeName(source(f, sd))}/${monthFmt.format(Date(f.lastModified()))}"
             val dir = File(sd, rel)
@@ -381,11 +426,13 @@ object Organizer {
     }
 
     /** Same as tidySdFiles, for phones where the SD card is reached through the system picker. */
-    private fun tidySdSaf(target: SafTarget, result: RunResult, onProgress: (String) -> Unit) {
+    private fun tidySdSaf(target: SafTarget, result: RunResult, shouldStop: () -> Boolean, onProgress: (String) -> Unit) {
         val cutoff = System.currentTimeMillis() - 10 * 60_000L
         val files = target.listAll { name, depth -> skipSdDir(name, depth) }
         val sdBase = File("/sd")
         for (f in files) {
+            while (paused && !shouldStop()) Thread.sleep(300)
+            if (shouldStop()) { result.stopped = true; break }
             if (skipFileName(f.name) || f.size <= 0L || f.modified > cutoff) continue
             val pseudo = File(sdBase, f.relPath)
             val rel = "$ARCHIVE/${category(pseudo)}/${safeName(source(pseudo, sdBase))}/${monthFmt.format(Date(f.modified))}"
