@@ -2,6 +2,8 @@ name: Build APK
 on:
   push:
   workflow_dispatch:
+permissions:
+  contents: write
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -16,7 +18,16 @@ jobs:
           gradle-version: '8.7'
       - name: Build
         run: gradle assembleRelease --no-daemon --stacktrace
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/*.apk SDOrganizer.apk
       - uses: actions/upload-artifact@v4
         with:
           name: SD-Organizer-APK
-          path: app/build/outputs/apk/release/*.apk
+          path: SDOrganizer.apk
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: SD Organizer v1.0.${{ github.run_number }}
+          files: SDOrganizer.apk
+          make_latest: true
