@@ -139,7 +139,13 @@ object Organizer {
                 return result
             }
 
+            if (!target.healthy()) {
+                result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
+                return result
+            }
+
             val base = Environment.getExternalStorageDirectory()
+            var failsInRow = 0
             val cutoff = System.currentTimeMillis() - prefs.minAgeMillis
             val scanPaths = ArrayList<String>()
             var count = 0
@@ -197,13 +203,20 @@ object Organizer {
                             }
                         }
 
-                        if (target.write(rel, finalName, f) && f.delete()) {
+                        val written = target.write(rel, finalName, f)
+                        if (written && f.delete()) {
                             result.moved++
                             result.bytesFreed += len
+                            failsInRow = 0
                             scanPaths.add(f.absolutePath)
                             target.realPath(rel, finalName)?.let { scanPaths.add(it) }
                         } else {
                             result.failed++
+                            if (!written) failsInRow++
+                            if (failsInRow >= 3 || (!written && !target.healthy())) {
+                                result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
+                                break@outer
+                            }
                         }
 
                         count++
@@ -314,6 +327,10 @@ object Organizer {
             }
             val finalName = uniqueName(name) { File(dir, it).exists() }
             val moved = target.moveWithin(f, rel, finalName)
+            if (moved == null && !target.healthy()) {
+                result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
+                break
+            }
             if (moved != null) {
                 result.tidied++
                 scanPaths.add(f.absolutePath)
@@ -344,7 +361,12 @@ object Organizer {
                 continue
             }
             val finalName = uniqueName(name) { target.sizeOf(rel, it) != null }
-            if (target.moveWithin(f, rel, finalName)) result.tidied++
+            if (target.moveWithin(f, rel, finalName)) {
+                result.tidied++
+            } else if (!target.healthy()) {
+                result.error = "The SD card stopped accepting files (it may be read-only or damaged). Nothing more was deleted from your phone. Back up the SD card and check it before trying again."
+                return
+            }
             if (result.tidied % 25 == 0) onProgress("Tidied ${result.tidied} SD card files…")
         }
     }

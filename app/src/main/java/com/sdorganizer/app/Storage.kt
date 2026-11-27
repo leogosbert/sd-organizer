@@ -22,6 +22,8 @@ interface MoveTarget {
     fun realPath(rel: String, name: String): String?
     /** True if the file at rel/name has the same content as src (size + start/end bytes). */
     fun sameContent(rel: String, name: String, src: File): Boolean
+    /** True if the SD card still accepts new files (false when it has turned read-only or failed). */
+    fun healthy(): Boolean
 }
 
 /** Compares two files cheaply: same size, same first and last 64 KB. */
@@ -46,6 +48,29 @@ object Fingerprint {
         raf.seek(start)
         raf.readFully(buf)
         buf
+    }
+
+    /** Reads both streams to the end and compares every byte. */
+    fun fullSame(a: java.io.InputStream, b: java.io.InputStream): Boolean {
+        val ba = ByteArray(256 * 1024)
+        val bb = ByteArray(256 * 1024)
+        while (true) {
+            val na = readFully(a, ba)
+            val nb = readFully(b, bb)
+            if (na != nb) return false
+            if (na <= 0) return true
+            for (i in 0 until na) if (ba[i] != bb[i]) return false
+        }
+    }
+
+    private fun readFully(input: java.io.InputStream, buf: ByteArray): Int {
+        var n = 0
+        while (n < buf.size) {
+            val r = input.read(buf, n, buf.size - n)
+            if (r < 0) break
+            n += r
+        }
+        return n
     }
 
     fun same(a: File, b: File): Boolean = try {
@@ -127,6 +152,9 @@ class FileTarget(private val root: File) : MoveTarget {
         return try {
             src.inputStream().use { input -> tmp.outputStream().use { out -> input.copyTo(out, 256 * 1024) } }
             if (tmp.length() != src.length()) { tmp.delete(); return false }
+            // Read the copy back from the SD card and compare every byte with the original
+            val ok = tmp.inputStream().use { a -> src.inputStream().use { b -> Fingerprint.fullSame(a, b) } }
+            if (!ok) { tmp.delete(); return false }
             if (!tmp.renameTo(dest)) { tmp.delete(); return false }
             dest.setLastModified(src.lastModified())
             true
@@ -140,6 +168,8 @@ class FileTarget(private val root: File) : MoveTarget {
 
     override fun sameContent(rel: String, name: String, src: File) =
         Fingerprint.same(File(File(root, rel), name), src)
+
+    override fun healthy(): Boolean = canWrite(root)
 
     /** Moves a file that is already on the SD card (instant rename, no copying). */
     fun moveWithin(src: File, rel: String, name: String): File? {
@@ -244,7 +274,9 @@ class SafTarget(ctx: Context, private val tree: Uri, private val root: File) : M
                     listing(d)[c.getString(1)] = Entry(doc, written, false)
                 }
             }
-            if (written != src.length()) {
+            val ok = written == src.length() &&
+                    (cr.openInputStream(doc)?.use { a -> src.inputStream().use { b -> Fingerprint.fullSame(a, b) } } ?: false)
+            if (!ok) {
                 runCatching { DocumentsContract.deleteDocument(cr, doc) }
                 false
             } else true
@@ -267,6 +299,17 @@ class SafTarget(ctx: Context, private val tree: Uri, private val root: File) : M
         } catch (ex: Exception) {
             false
         }
+    }
+
+    override fun healthy(): Boolean = try {
+        val d = dir(Organizer.ARCHIVE, true)
+        val probe = if (d != null) DocumentsContract.createDocument(cr, d, "application/octet-stream", ".probe") else null
+        if (probe != null) {
+            DocumentsContract.deleteDocument(cr, probe)
+            true
+        } else false
+    } catch (e: Exception) {
+        false
     }
 
     /** A file already on the SD card. relPath is relative to the SD card root. */

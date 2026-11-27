@@ -65,10 +65,6 @@ class MainActivity : AppCompatActivity() {
             override fun onNothingSelected(p: AdapterView<*>?) {}
         }
 
-        bindSwitch(R.id.swAuto, prefs.autoEnabled) {
-            prefs.autoEnabled = it
-            OrganizeWorker.scheduleAuto(this, it)
-        }
         bindSwitch(R.id.swCamera, prefs.moveCamera) { prefs.moveCamera = it }
         bindSwitch(R.id.swChat, prefs.moveChatMedia) { prefs.moveChatMedia = it }
         bindSwitch(R.id.swTidy, prefs.tidySd) { prefs.tidySd = it }
@@ -106,7 +102,8 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        if (prefs.autoEnabled) OrganizeWorker.scheduleAuto(this, true)
+        // Manual mode only: remove the hourly job left by older versions
+        OrganizeWorker.cancelAuto(this)
     }
 
     override fun onResume() {
@@ -159,7 +156,7 @@ class MainActivity : AppCompatActivity() {
             sdRoot == null -> "Insert an SD card to continue."
             !access -> "Tap step 1 and turn ON “Allow access to manage all files”."
             target == null -> "Tap step 2, open the SD card (top level) and press “Use this folder”."
-            else -> "All set. Files will be moved automatically."
+            else -> "All set. Files move only when you tap “Move & organize now”."
         }
 
         buildSpeedCheck(iPct)

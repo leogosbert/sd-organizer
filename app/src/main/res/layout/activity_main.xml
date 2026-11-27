@@ -132,12 +132,6 @@
             android:layout_height="48dp" />
 
         <com.google.android.material.materialswitch.MaterialSwitch
-            android:id="@+id/swAuto"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="Run automatically (every hour)" />
-
-        <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/swCamera"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

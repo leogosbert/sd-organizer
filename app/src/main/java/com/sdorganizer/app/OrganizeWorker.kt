@@ -1,18 +1,14 @@
 package com.sdorganizer.app
 
 import android.content.Context
-import androidx.work.Constraints
-import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequestBuilder
-import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
 import java.text.DateFormat
 import java.util.Date
-import java.util.concurrent.TimeUnit
 
 class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, params) {
 
@@ -34,16 +30,9 @@ class OrganizeWorker(ctx: Context, params: WorkerParameters) : Worker(ctx, param
         const val AUTO = "organize_auto"
         const val NOW = "organize_now"
 
-        fun scheduleAuto(ctx: Context, enabled: Boolean) {
-            val wm = WorkManager.getInstance(ctx)
-            if (!enabled) {
-                wm.cancelUniqueWork(AUTO)
-                return
-            }
-            val req = PeriodicWorkRequestBuilder<OrganizeWorker>(1, TimeUnit.HOURS)
-                .setConstraints(Constraints.Builder().setRequiresBatteryNotLow(true).build())
-                .build()
-            wm.enqueueUniquePeriodicWork(AUTO, ExistingPeriodicWorkPolicy.UPDATE, req)
+        /** The app now runs only when the user taps the button; this removes any old hourly job. */
+        fun cancelAuto(ctx: Context) {
+            WorkManager.getInstance(ctx).cancelUniqueWork(AUTO)
         }
 
         fun runNow(ctx: Context) {

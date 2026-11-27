@@ -16,10 +16,6 @@ class Prefs(ctx: Context) {
         get() = sp.getInt("age_idx", 0)
         set(v) = sp.edit().putInt("age_idx", v).apply()
 
-    var autoEnabled: Boolean
-        get() = sp.getBoolean("auto", true)
-        set(v) = sp.edit().putBoolean("auto", v).apply()
-
     var moveCamera: Boolean
         get() = sp.getBoolean("camera", true)
         set(v) = sp.edit().putBoolean("camera", v).apply()
