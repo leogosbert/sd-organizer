@@ -20,6 +20,41 @@ interface MoveTarget {
     fun write(rel: String, name: String, src: File): Boolean
     /** Real file path for media scanning, if known. */
     fun realPath(rel: String, name: String): String?
+    /** True if the file at rel/name has the same content as src (size + start/end bytes). */
+    fun sameContent(rel: String, name: String, src: File): Boolean
+}
+
+/** Compares two files cheaply: same size, same first and last 64 KB. */
+object Fingerprint {
+    private const val CHUNK = 64 * 1024
+
+    fun head(input: java.io.InputStream): ByteArray {
+        val buf = ByteArray(CHUNK)
+        var n = 0
+        while (n < CHUNK) {
+            val r = input.read(buf, n, CHUNK - n)
+            if (r < 0) break
+            n += r
+        }
+        return buf.copyOf(n)
+    }
+
+    fun tail(f: File): ByteArray = java.io.RandomAccessFile(f, "r").use { raf ->
+        val len = raf.length()
+        val start = maxOf(0L, len - CHUNK)
+        val buf = ByteArray((len - start).toInt())
+        raf.seek(start)
+        raf.readFully(buf)
+        buf
+    }
+
+    fun same(a: File, b: File): Boolean = try {
+        a.length() == b.length() &&
+                a.inputStream().use { head(it) }.contentEquals(b.inputStream().use { head(it) }) &&
+                tail(a).contentEquals(tail(b))
+    } catch (e: Exception) {
+        false
+    }
 }
 
 object StorageInfo {
@@ -102,6 +137,19 @@ class FileTarget(private val root: File) : MoveTarget {
     }
 
     override fun realPath(rel: String, name: String) = File(File(root, rel), name).absolutePath
+
+    override fun sameContent(rel: String, name: String, src: File) =
+        Fingerprint.same(File(File(root, rel), name), src)
+
+    /** Moves a file that is already on the SD card (instant rename, no copying). */
+    fun moveWithin(src: File, rel: String, name: String): File? {
+        val dir = File(root, rel)
+        if (!dir.isDirectory && !dir.mkdirs()) return null
+        val dest = File(dir, name)
+        return if (src.renameTo(dest)) dest else null
+    }
+
+    fun root(): File = root
 
     companion object {
         fun canWrite(root: File): Boolean = try {
@@ -207,6 +255,87 @@ class SafTarget(ctx: Context, private val tree: Uri, private val root: File) : M
     }
 
     override fun realPath(rel: String, name: String) = File(File(root, rel), name).absolutePath
+
+    override fun sameContent(rel: String, name: String, src: File): Boolean {
+        val d = dir(rel, false) ?: return false
+        val e = listing(d)[name] ?: return false
+        if (e.isDir || e.size != src.length()) return false
+        return try {
+            val a = cr.openInputStream(e.uri)?.use { Fingerprint.head(it) } ?: return false
+            val b = src.inputStream().use { Fingerprint.head(it) }
+            a.contentEquals(b)
+        } catch (ex: Exception) {
+            false
+        }
+    }
+
+    /** A file already on the SD card. relPath is relative to the SD card root. */
+    class DocFile(val uri: Uri, val parent: Uri, val name: String, val size: Long, val modified: Long, val relPath: String)
+
+    /** Lists every file on the SD card, skipping top-level folders for which skipTop returns true. */
+    fun listAll(skipDir: (name: String, depth: Int) -> Boolean): List<DocFile> {
+        val out = ArrayList<DocFile>()
+        val stack = ArrayDeque<Triple<Uri, String, Int>>()
+        stack.add(Triple(rootDoc, "", 0))
+        while (stack.isNotEmpty()) {
+            val (dirUri, path, depth) = stack.removeAt(stack.size - 1)
+            val q = DocumentsContract.buildChildDocumentsUriUsingTree(tree, DocumentsContract.getDocumentId(dirUri))
+            cr.query(
+                q,
+                arrayOf(
+                    Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_SIZE,
+                    Document.COLUMN_MIME_TYPE, Document.COLUMN_LAST_MODIFIED
+                ),
+                null, null, null
+            )?.use { c ->
+                while (c.moveToNext()) {
+                    val u = DocumentsContract.buildDocumentUriUsingTree(tree, c.getString(0))
+                    val name: String = c.getString(1) ?: ""
+                    val rel = if (path.isEmpty()) name else "$path/$name"
+                    if (name.isEmpty()) {
+                        // skip unnamed entries
+                    } else if (c.getString(3) == Document.MIME_TYPE_DIR) {
+                        if (!skipDir(name, depth)) stack.add(Triple(u, rel, depth + 1))
+                    } else {
+                        val size = if (c.isNull(2)) 0L else c.getLong(2)
+                        val mod = if (c.isNull(4)) 0L else c.getLong(4)
+                        out.add(DocFile(u, dirUri, name, size, mod, rel))
+                    }
+                }
+            }
+        }
+        return out
+    }
+
+    /** Moves a file already on the SD card into rel/newName. No copying. */
+    fun moveWithin(f: DocFile, rel: String, newName: String): Boolean {
+        val dest = dir(rel, true) ?: return false
+        return try {
+            var src = f.uri
+            if (newName != f.name) src = DocumentsContract.renameDocument(cr, src, newName) ?: return false
+            val moved = DocumentsContract.moveDocument(cr, src, f.parent, dest) ?: return false
+            listing(dest)[newName] = Entry(moved, f.size, false)
+            true
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    /** True if f has the same size and first bytes as rel/name. */
+    fun sameDoc(f: DocFile, rel: String, name: String): Boolean {
+        val d = dir(rel, false) ?: return false
+        val e = listing(d)[name] ?: return false
+        if (e.isDir || e.size != f.size) return false
+        return try {
+            val a = cr.openInputStream(e.uri)?.use { Fingerprint.head(it) } ?: return false
+            val b = cr.openInputStream(f.uri)?.use { Fingerprint.head(it) } ?: return false
+            a.contentEquals(b)
+        } catch (ex: Exception) {
+            false
+        }
+    }
+
+    fun delete(f: DocFile): Boolean = runCatching { DocumentsContract.deleteDocument(cr, f.uri) }.getOrDefault(false)
 
     companion object {
         fun persist(ctx: Context, uri: Uri) {

@@ -28,6 +28,10 @@ class Prefs(ctx: Context) {
         get() = sp.getBoolean("chat", true)
         set(v) = sp.edit().putBoolean("chat", v).apply()
 
+    var tidySd: Boolean
+        get() = sp.getBoolean("tidy_sd", true)
+        set(v) = sp.edit().putBoolean("tidy_sd", v).apply()
+
     var cleanThumbnails: Boolean
         get() = sp.getBoolean("thumbs", true)
         set(v) = sp.edit().putBoolean("thumbs", v).apply()

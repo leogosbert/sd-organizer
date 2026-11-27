@@ -16,11 +16,13 @@ class RunResult {
     var failed = 0
     var bytesFreed = 0L
     var thumbsFreed = 0L
+    var tidied = 0
     var error: String? = null
 
     fun summary(): String {
         val sb = StringBuilder()
         sb.append("Moved $moved files, freed ${StorageInfo.fmt(bytesFreed + thumbsFreed)}")
+        if (tidied > 0) sb.append(" · tidied $tidied SD card files")
         if (duplicates > 0) sb.append(" · $duplicates duplicates removed")
         if (failed > 0) sb.append(" · $failed could not be moved")
         error?.let { sb.append("\n⚠ ").append(it) }
@@ -88,7 +90,8 @@ object Organizer {
             path.contains("record") -> "Recordings"
             path.contains("/download") -> "Downloads"
             rel.startsWith("Android/media/") -> rel.removePrefix("Android/media/").substringBefore('/')
-            else -> rel.substringBefore('/').ifEmpty { "Phone" }
+            rel.contains('/') -> rel.substringBefore('/')
+            else -> "Loose files"
         }
     }
 
@@ -174,7 +177,7 @@ object Organizer {
                         val name = safeName(f.name)
 
                         val existing = target.sizeOf(rel, name)
-                        if (existing != null && existing == len) {
+                        if (existing != null && existing == len && target.sameContent(rel, name, f)) {
                             // Same file already on SD card: just remove the internal copy
                             if (f.delete()) {
                                 result.duplicates++
@@ -216,12 +219,133 @@ object Organizer {
                 removeEmptyDirs(root, isRoot = true)
             }
             scan(ctx, scanPaths)
+            scanPaths.clear()
+
+            if (prefs.tidySd && result.error == null) {
+                onProgress("Tidying files already on the SD card…")
+                when (target) {
+                    is FileTarget -> tidySdFiles(ctx, target, result, onProgress)
+                    is SafTarget -> tidySdSaf(target, result, onProgress)
+                }
+            }
             return result
         } catch (e: Exception) {
             result.error = e.message ?: e.toString()
             return result
         } finally {
             lock.unlock()
+        }
+    }
+
+    /** SD card folders that are never touched. */
+    private fun skipSdTop(name: String): Boolean {
+        val l = name.lowercase(Locale.US)
+        return l.startsWith(".") || l == "android" || l == "lost.dir" || l == ARCHIVE.lowercase(Locale.US) ||
+                l == "system volume information" || l in SKIP_DIRS
+    }
+
+    private fun skipSdDir(name: String, depth: Int): Boolean {
+        val l = name.lowercase(Locale.US)
+        return if (depth == 0) skipSdTop(name) else (l.startsWith(".") || l in SKIP_DIRS)
+    }
+
+    private fun skipFileName(name: String): Boolean {
+        val l = name.lowercase(Locale.US)
+        return l.startsWith(".") || l.substringAfterLast('.', "") in PARTIAL_EXT
+    }
+
+    private fun uniqueName(name: String, taken: (String) -> Boolean): String {
+        if (!taken(name)) return name
+        val stem = name.substringBeforeLast('.', name)
+        val ext = if (name.contains('.')) "." + name.substringAfterLast('.') else ""
+        var i = 1
+        var cand: String
+        do {
+            cand = "$stem ($i)$ext"
+            i++
+        } while (taken(cand))
+        return cand
+    }
+
+    /**
+     * Re-files everything already on the SD card (outside PhoneArchive) into the same
+     * PhoneArchive/<Category>/<Source>/<YYYY-MM> layout. Files stay on the SD card, so this is an
+     * instant rename, not a copy.
+     */
+    private fun tidySdFiles(ctx: Context, target: FileTarget, result: RunResult, onProgress: (String) -> Unit) {
+        val sd = target.root()
+        val cutoff = System.currentTimeMillis() - 10 * 60_000L
+        val files = ArrayList<File>()
+        val tops = ArrayList<File>()
+        sd.listFiles()?.forEach { top ->
+            if (top.isDirectory) {
+                if (!skipSdTop(top.name)) tops.add(top)
+            } else if (!skipFileName(top.name)) {
+                files.add(top)
+            }
+        }
+        for (top in tops) {
+            val stack = ArrayDeque<File>()
+            stack.push(top)
+            while (stack.isNotEmpty()) {
+                val d = stack.pop()
+                d.listFiles()?.forEach { f ->
+                    if (f.isDirectory) {
+                        if (!skipSdDir(f.name, 1)) stack.push(f)
+                    } else if (!skipFileName(f.name)) {
+                        files.add(f)
+                    }
+                }
+            }
+        }
+        val scanPaths = ArrayList<String>()
+        for (f in files) {
+            if (f.length() <= 0L || f.lastModified() > cutoff) continue
+            val rel = "$ARCHIVE/${category(f)}/${safeName(source(f, sd))}/${monthFmt.format(Date(f.lastModified()))}"
+            val dir = File(sd, rel)
+            val name = safeName(f.name)
+            val existing = File(dir, name)
+            if (existing.isFile && Fingerprint.same(existing, f)) {
+                if (f.delete()) {
+                    result.duplicates++
+                    scanPaths.add(f.absolutePath)
+                }
+                continue
+            }
+            val finalName = uniqueName(name) { File(dir, it).exists() }
+            val moved = target.moveWithin(f, rel, finalName)
+            if (moved != null) {
+                result.tidied++
+                scanPaths.add(f.absolutePath)
+                scanPaths.add(moved.absolutePath)
+            }
+            if (moved != null && result.tidied % 25 == 0) onProgress("Tidied ${result.tidied} SD card files…")
+            if (scanPaths.size >= 200) {
+                scan(ctx, scanPaths)
+                scanPaths.clear()
+            }
+        }
+        scan(ctx, scanPaths)
+        for (top in tops) removeEmptyDirs(top, isRoot = false)
+    }
+
+    /** Same as tidySdFiles, for phones where the SD card is reached through the system picker. */
+    private fun tidySdSaf(target: SafTarget, result: RunResult, onProgress: (String) -> Unit) {
+        val cutoff = System.currentTimeMillis() - 10 * 60_000L
+        val files = target.listAll { name, depth -> skipSdDir(name, depth) }
+        val sdBase = File("/sd")
+        for (f in files) {
+            if (skipFileName(f.name) || f.size <= 0L || f.modified > cutoff) continue
+            val pseudo = File(sdBase, f.relPath)
+            val rel = "$ARCHIVE/${category(pseudo)}/${safeName(source(pseudo, sdBase))}/${monthFmt.format(Date(f.modified))}"
+            val name = safeName(f.name)
+            if (target.sameDoc(f, rel, name)) {
+                if (target.delete(f)) result.duplicates++
+                continue
+            }
+            val finalName = uniqueName(name) { target.sizeOf(rel, it) != null }
+            if (target.moveWithin(f, rel, finalName)) result.tidied++
+            if (result.tidied % 25 == 0) onProgress("Tidied ${result.tidied} SD card files…")
         }
     }
 

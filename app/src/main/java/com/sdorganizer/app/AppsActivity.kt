@@ -91,7 +91,7 @@ class AppsActivity : AppCompatActivity() {
         @Suppress("DEPRECATION")
         val apps = pm.getInstalledApplications(0)
         for (ai in apps) {
-            if (ai.flags and ApplicationInfo.FLAG_SYSTEM != 0) continue
+            if ((ai.flags and ApplicationInfo.FLAG_SYSTEM) != 0) continue
             if (ai.packageName == packageName) continue
             val last = usage[ai.packageName]?.lastTimeUsed ?: 0L
             val days = if (last <= 0L) 365 else ((now - last) / 86_400_000L).toInt()

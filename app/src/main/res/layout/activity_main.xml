@@ -156,6 +156,12 @@
             android:textAppearance="?attr/textAppearanceBodySmall" />
 
         <com.google.android.material.materialswitch.MaterialSwitch
+            android:id="@+id/swTidy"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Also reorganize files already on the SD card" />
+
+        <com.google.android.material.materialswitch.MaterialSwitch
             android:id="@+id/swThumbs"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -178,10 +184,25 @@
 
         <!-- Speed -->
         <TextView
+            android:id="@+id/txtSpeedTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="Make the phone faster"
+            android:text="Speed check"
             android:textAppearance="?attr/textAppearanceTitleMedium" />
+
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Tap any ⚠ item to fix it"
+            android:textAppearance="?attr/textAppearanceBodySmall" />
+
+        <LinearLayout
+            android:id="@+id/speedList"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="6dp"
+            android:layout_marginBottom="8dp"
+            android:orientation="vertical" />
 
         <com.google.android.material.button.MaterialButton
             android:id="@+id/btnUnused"

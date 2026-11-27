@@ -71,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         }
         bindSwitch(R.id.swCamera, prefs.moveCamera) { prefs.moveCamera = it }
         bindSwitch(R.id.swChat, prefs.moveChatMedia) { prefs.moveChatMedia = it }
+        bindSwitch(R.id.swTidy, prefs.tidySd) { prefs.tidySd = it }
         bindSwitch(R.id.swThumbs, prefs.cleanThumbnails) { prefs.cleanThumbnails = it }
 
         findViewById<MaterialButton>(R.id.btnRun).setOnClickListener {
@@ -161,9 +162,104 @@ class MainActivity : AppCompatActivity() {
             else -> "All set. Files will be moved automatically."
         }
 
+        buildSpeedCheck(iPct)
+
         val btn = findViewById<MaterialButton>(R.id.btnRun)
         if (btn.isEnabled) {
             findViewById<TextView>(R.id.txtStatus).text = prefs.lastRunSummary?.let { "Last run: $it" } ?: ""
+        }
+    }
+
+    /** Checks the things that really make a phone slow, and links each to its fix. */
+    private fun buildSpeedCheck(internalPct: Int) {
+        val items = ArrayList<Triple<Boolean, String, () -> Unit>>()
+
+        items.add(
+            Triple(
+                internalPct < 80,
+                if (internalPct < 80) "Phone memory $internalPct% full — good"
+                else "Phone memory $internalPct% full — phones slow down above 80%. Tap to move files now.",
+                { if (ready()) OrganizeWorker.runNow(this) else requestFileAccess() }
+            )
+        )
+
+        val scale = maxOf(
+            Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f),
+            Settings.Global.getFloat(contentResolver, Settings.Global.TRANSITION_ANIMATION_SCALE, 1f),
+            Settings.Global.getFloat(contentResolver, Settings.Global.WINDOW_ANIMATION_SCALE, 1f)
+        )
+        items.add(
+            Triple(
+                scale <= 0.5f,
+                if (scale <= 0.5f) "Animations ${scale}x — fast"
+                else "Animations ${scale}x — set to 0.5x so screens open twice as fast",
+                { showAnimationHelp() }
+            )
+        )
+
+        val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+        val saver = pm.isPowerSaveMode
+        items.add(
+            Triple(
+                !saver,
+                if (!saver) "Battery saver off — full speed"
+                else "Battery saver is ON — it slows the phone down. Tap to turn off when not needed.",
+                { openFirst(Intent(Settings.ACTION_BATTERY_SAVER_SETTINGS), Intent(Settings.ACTION_SETTINGS)) }
+            )
+        )
+
+        val live = runCatching { android.app.WallpaperManager.getInstance(this).wallpaperInfo != null }
+            .getOrDefault(false)
+        items.add(
+            Triple(
+                !live,
+                if (!live) "Normal wallpaper — good"
+                else "Live (moving) wallpaper uses power and memory. Tap to choose a normal picture.",
+                { openFirst(Intent(Intent.ACTION_SET_WALLPAPER), Intent(Settings.ACTION_DISPLAY_SETTINGS)) }
+            )
+        )
+
+        val days = (android.os.SystemClock.elapsedRealtime() / 86_400_000L).toInt()
+        items.add(
+            Triple(
+                days < 7,
+                if (days < 7) "Restarted recently — good"
+                else "Phone not restarted for $days days. Restart it to clear memory.",
+                {
+                    Toast.makeText(this, "Hold the power button and tap Restart", Toast.LENGTH_LONG).show()
+                }
+            )
+        )
+
+        items.add(
+            Triple(
+                false,
+                "Remove apps you don't use — they run in the background and slow the phone.",
+                { startActivity(Intent(this, AppsActivity::class.java)) }
+            )
+        )
+
+        val list = findViewById<android.widget.LinearLayout>(R.id.speedList)
+        list.removeAllViews()
+        val pad = (10 * resources.displayMetrics.density).toInt()
+        for ((ok, text, action) in items) {
+            val tv = TextView(this)
+            tv.text = (if (ok) "✓  " else "⚠  ") + text
+            tv.setPadding(0, pad, 0, pad)
+            tv.textSize = 15f
+            if (!ok) tv.setOnClickListener { action() }
+            list.addView(tv)
+        }
+        val good = items.count { it.first }
+        findViewById<TextView>(R.id.txtSpeedTitle).text = "Speed check: $good of ${items.size - 1} good"
+    }
+
+    private fun openFirst(vararg intents: Intent) {
+        for (i in intents) {
+            try {
+                startActivity(i); return
+            } catch (_: Exception) {
+            }
         }
     }
 
